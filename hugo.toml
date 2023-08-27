@@ -1,0 +1,24 @@
+baseURL = 'http://5init.github.io/'
+languageCode = 'en-us'
+title = "5init's cum dungeon 😳"
+theme = 'hugo-blog-awesome'
+
+defaultContentLanguage = "id-id"
+
+[params.author]
+avatar = "assets/pp.jpg"
+intro = "5init"
+name = "5init"
+description = "Indonesian Linux YTbers"
+
+[[params.socialIcons]]
+name = "youtube"
+url = "https://youtube.com/@5init"
+
+[[params.socialIcons]]
+name = "mastodon"
+url = "https://misskey.id/@5init"
+
+[[params.socialIcons]]
+name = "github"
+url = "https://github.com/5init"
