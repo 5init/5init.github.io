@@ -4,6 +4,7 @@ Fetches the latest videos from a YouTube channel RSS feed
 and updates the video section in markdown/index.md.
 """
 
+import json
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -11,10 +12,15 @@ import re
 import sys
 
 CHANNEL_ID = "UCafepdaI30MCpNn_jSK_NiQ"
+CHANNEL_HANDLE = "@5init"
 RSS_URL = f"https://www.youtube.com/feeds/videos.xml?channel_id={CHANNEL_ID}"
 INDEX_MD = "markdown/index.md"
 MAX_VIDEOS = 3
-MAX_SCAN_ENTRIES = 20
+# The channel's Videos tab shows ~18 uploads; scanning deeper than that
+# would make entries whose id is outside that window look like streams.
+MAX_SCAN_ENTRIES = 18
+
+_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"}
 
 NS = {
     "atom":  "http://www.w3.org/2005/Atom",
@@ -28,14 +34,64 @@ def fetch_rss(url: str) -> ET.Element:
         return ET.fromstring(resp.read())
 
 
-def is_livestream(video_id: str) -> bool:
-    """True if the watch page marks this video as live content.
+def fetch_regular_video_ids() -> set[str]:
+    """Video IDs of regular uploads, taken from the channel's Videos tab.
 
-    The RSS feed does not say whether an entry is a livestream, so each
-    video's watch page is probed and ``videoDetails.isLiveContent`` is
-    read. Tries the lightweight mobile page first, falling back to the
-    desktop page. Returns False if the probe fails, so a transient error
-    never hides a regular video.
+    YouTube lists only ordinary uploads on the Videos tab — livestream
+    VODs and Shorts live on their own tabs — so membership in this set
+    reliably tells us (without probing each watch page) whether a feed
+    entry is a real upload. Handles both the new lockup view model and
+    the older videoRenderer layout.
+    """
+    ids: set[str] = set()
+    urls = [
+        f"https://m.youtube.com/{CHANNEL_HANDLE}/videos",
+        f"https://www.youtube.com/{CHANNEL_HANDLE}/videos",
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+
+            m = re.search(r"ytInitialData\s*=\s*(\{.*?\});", html, re.DOTALL)
+            if not m:
+                continue
+            data = json.loads(m.group(1))
+        except Exception:
+            continue
+
+        def collect(node) -> None:
+            if isinstance(node, dict):
+                lockup = node.get("lockupViewModel")
+                if lockup and lockup.get("contentType") == "LOCKUP_CONTENT_TYPE_VIDEO":
+                    cid = lockup.get("contentId")
+                    if cid:
+                        ids.add(cid)
+                renderer = node.get("videoRenderer")
+                if isinstance(renderer, dict):
+                    vid = renderer.get("videoId")
+                    if vid:
+                        ids.add(vid)
+                for value in node.values():
+                    collect(value)
+            elif isinstance(node, list):
+                for value in node:
+                    collect(value)
+
+        collect(data)
+        if ids:
+            return ids
+    return ids
+
+
+def is_livestream(video_id: str) -> bool:
+    """Fallback live check: True if the watch page marks video as live.
+
+    Preferred classification uses the channel's Videos tab
+    (``fetch_regular_video_ids``); this probe is only a fallback when
+    that page cannot be fetched. Returns False if the probe fails, so a
+    transient error never hides a regular video.
     """
     if not video_id:
         return False
@@ -44,14 +100,13 @@ def is_livestream(video_id: str) -> bool:
         f"https://m.youtube.com/watch?v={video_id}",
         f"https://www.youtube.com/watch?v={video_id}",
     ]
-    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"}
 
     for url in urls:
         try:
-            req = urllib.request.Request(url, headers=headers)
+            req = urllib.request.Request(url, headers=_HEADERS)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 html = resp.read().decode("utf-8", errors="ignore")
-            m = re.search(r'"isLiveContent":(true|false)', html)
+            m = re.search(r'"isLiveContent"\s*:\s*(true|false)', html)
             if m:
                 return m.group(1) == "true"
         except Exception:
@@ -177,15 +232,27 @@ if __name__ == "__main__":
         print("No videos found in feed.", file=sys.stderr)
         sys.exit(1)
 
-    # Skip livestreams and Shorts; keep the newest MAX_VIDEOS regular uploads.
+    # YouTube's Videos tab tells us which feed entries are regular uploads.
+    # If that page is unavailable, fall back to probing each watch page.
+    regular_ids = fetch_regular_video_ids()
+    if regular_ids:
+        print(f"Videos tab lists {len(regular_ids)} regular upload(s).")
+    else:
+        print("Videos tab unavailable; falling back to per-video probes.")
+
     regular = []
     for v in videos:
-        if is_livestream(v["videoid"]):
-            print(f"Skipping livestream: {v['title'][:60]}")
-            continue
-        if "/shorts/" in v["url"]:
-            print(f"Skipping short: {v['title'][:60]}")
-            continue
+        if regular_ids:
+            if v["videoid"] not in regular_ids:
+                print(f"Skipping non-upload (livestream/Short): {v['title'][:60]}")
+                continue
+        else:
+            if is_livestream(v["videoid"]):
+                print(f"Skipping livestream: {v['title'][:60]}")
+                continue
+            if "/shorts/" in v["url"]:
+                print(f"Skipping short: {v['title'][:60]}")
+                continue
         regular.append(v)
         if len(regular) == MAX_VIDEOS:
             break

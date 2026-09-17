@@ -22,7 +22,7 @@ Edit `scripts/fetch_videos.py` to set:
 
 - `CHANNEL_ID` — the YouTube channel ID (find it at [commentpicker.com/youtube-channel-id.php](https://commentpicker.com/youtube-channel-id.php))
 - `MAX_VIDEOS` — how many recent videos to show (default: 3)
-- Livestreams and Shorts are detected automatically and skipped, so only regular, embeddable uploads are shown.
+- Livestreams and Shorts never appear: the channel's Videos tab is used to identify regular uploads (a per-video check is the fallback if that page is unavailable).
 
 ### 2. Add avatar (optional)
 
