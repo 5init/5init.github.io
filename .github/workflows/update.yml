@@ -1,0 +1,46 @@
+name: Update Videos
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6 hours
+  workflow_dispatch:          # allow manual trigger from GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Markdown.pl
+        run: |
+          sudo apt-get install -y libtext-markdown-perl
+          # 'markdown' command should now be available
+          markdown --version || true
+
+      - name: Verify Markdown.pl is present
+        run: |
+          test -f Markdown.pl || (echo "ERROR: Markdown.pl not found in repo root. Download it from https://daringfireball.net/projects/markdown/ and commit it." && exit 1)
+          perl -c Markdown.pl
+
+      - name: Fetch latest videos from RSS
+        run: python3 scripts/fetch_videos.py
+
+      - name: Build HTML
+        run: bash scripts/build.sh
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html markdown/index.md
+          if git diff --cached --quiet; then
+            echo "Nothing changed, skipping commit."
+          else
+            git commit -m "chore: update videos $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
